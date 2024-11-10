@@ -5,9 +5,9 @@ import psycopg
 from dotenv import load_dotenv
 from netmiko import ConnectHandler
 
-class eigrp_speaker():
+class EIGRPSpeaker():
     def __init__(self,ip):
-        self.ip = ip
+        self.ip = str(ip)
         self.dns_name = self.dns_record(ip)
         conn_data = {
             'device_type': 'cisco_ios',
@@ -24,11 +24,13 @@ class eigrp_speaker():
             self.hostname = self.collect_hostname(self.ssh_connection)
             self.eigrp_neighbors = self.collect_eigrp_neighbors(self.ssh_connection)
             self.rx_prefixes = self.collect_rx_prefixes(self.ssh_connection, self.eigrp_neighbors)
-        except:
+        except Exception as e:
+            print(f"Error collecting information from {ip}:\n\n {e}")
             self.ssh_state = False
             self.eigrp_data = dict()
             self.hostname = None
             self.eigrp_neighbors = list()
+            self.rx_prefixes = list()
     
     def collect_hostname(self, ssh_connection):
         try: 
@@ -84,6 +86,8 @@ def create_db_tables(conn):
                     ip INET PRIMARY KEY,
                     hostname VARCHAR(255),
                     dns_name VARCHAR(255),
+                    num_prefixes INT,
+                    num_neighbors INT,
                     discovered_state BOOL,
                     ssh_state BOOL
                 );
@@ -100,118 +104,124 @@ def create_db_tables(conn):
                 """)
 
 def inventory_to_db(conn, rtr):
-        # Open a cursor to perform database operations
-        with conn.cursor() as cur:
+    
+    def inventory_router(cursor, rtr):
+        """
+        Inserts or updates a router in the inventory table.
+        
+        Parameters:
+            cursor (psycopg cursor): Database cursor for executing queries.
+            rtr (EIGRPSpeaker): Router object containing router details.
+        """
+        cursor.execute(
+            """
+            INSERT INTO inventory (
+                ip, hostname, dns_name, num_prefixes, num_neighbors, 
+                discovered_state, ssh_state
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (ip) 
+            DO UPDATE SET
+                hostname = EXCLUDED.hostname,
+                dns_name = EXCLUDED.dns_name,
+                num_prefixes = EXCLUDED.num_prefixes,
+                num_neighbors = EXCLUDED.num_neighbors,
+                discovered_state = EXCLUDED.discovered_state,
+                ssh_state = EXCLUDED.ssh_state;
+            """,
+            (
+                rtr.ip,
+                rtr.hostname,
+                rtr.dns_name,
+                len(rtr.rx_prefixes) if rtr.rx_prefixes else 0,  # Number of prefixes
+                len(rtr.eigrp_neighbors),                 # Number of neighbors
+                True,                                             # Discovered state
+                rtr.ssh_state                                     # SSH state
+            )
+        )
 
-            # Add the rtr to inventory if it doesn't already exist.
-            cur.execute(
+    def inventory_rtr_neighbors(cursor, rtr):
+        # Loop through all the rtr's learned neighbors...
+        for nei in rtr.eigrp_neighbors:
+            # add the neighbor to inventory if it doesn't exist yet
+            cursor.execute(
                 """
-                INSERT INTO inventory (ip, hostname, dns_name, discovered_state, ssh_state)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (ip) 
-                DO UPDATE SET
-                    hostname = EXCLUDED.hostname,
-                    dns_name = EXCLUDED.dns_name,
-                    discovered_state = EXCLUDED.discovered_state,
-                    ssh_state = EXCLUDED.ssh_state;
+                INSERT INTO inventory (ip, discovered_state) 
+                VALUES (%s, %s)
+                ON CONFLICT (ip) DO NOTHING;
+                """, 
+                (nei, False)
+            )                    
+    def import_rtr_adjacencies(cursor, rtr):
+        # Create rtr --> nei relationship.
+        # Also adds learned prefixes from the nei to DB.
+        # Override previous data ON CONFLICT because this is
+        # the actual live data as seen from the rtr's perspective.
+        for nei in rtr.eigrp_neighbors:
+            cursor.execute(
+                """
+                INSERT INTO router_neighbors 
+                (router_id, neighbor_id, learned_prefixes)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (router_id, neighbor_id) DO 
+                UPDATE SET
+                    router_id = EXCLUDED.router_id,
+                    neighbor_id = EXCLUDED.neighbor_id,
+                    learned_prefixes = EXCLUDED.learned_prefixes
+                ;
                 """,
-                (rtr.ip, rtr.hostname, rtr.dns_name, True, rtr.ssh_state)
+                (rtr.ip, nei, rtr.rx_prefixes[nei])
             )
 
-            # Loop through all the rtr's learned neighbors...
-            for nei in rtr.eigrp_neighbors:
-                # add the neighbor to inventory if it doesn't exist yet
-                cur.execute(
-                    """
-                    INSERT INTO inventory (ip, discovered_state) 
-                    VALUES (%s, %s)
-                    ON CONFLICT (ip) DO NOTHING;
-                    """, 
-                    (nei, False)
-                )                    
-                
-                # Create rtr --> nei relationship.
-                # Also adds learned prefixes from the nei to DB.
-                # Override previous data ON CONFLICT because this is
-                # the actual live data as seen from the rtr's perspective.
-                cur.execute(
-                    """
-                    INSERT INTO router_neighbors 
-                    (router_id, neighbor_id, learned_prefixes)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (router_id, neighbor_id) DO 
-                    UPDATE SET
-                        router_id = EXCLUDED.router_id,
-                        neighbor_id = EXCLUDED.neighbor_id,
-                        learned_prefixes = EXCLUDED.learned_prefixes
-                    ;
-                    """,
-                    (rtr.ip, nei, rtr.rx_prefixes[nei])
-                )
+            # Below section adds an implied bidi relationship, but I could just simplify logic and rely
+            # on the above code. Hmm. What's cleaner? It seems better to always add the two-way relationship,
+            # but then I have to rely on SQL logic to only UPSERT when it makes sense.
 
-                # Below section adds an implied bidi relationship, but I could just simplify logic and rely
-                # on the above code. Hmm. What's cleaner? It seems better to always add the two-way relationship,
-                # but then I have to rely on SQL logic to only UPSERT when it makes sense.
+            # # ...and create the nei --> rtr relationship (reverse).
+            # # We could try to add 'learned_prefixes' here, 
+            # # but it makes more sense to learn it from the 
+            # # remote router's perspective on a subsequent cycle
+            # # with the SQL statement above.
+            # cur.execute(
+            #     """
+            #     INSERT INTO router_neighbors (router_id, neighbor_id)
+            #     VALUES (%s, %s)
+            #     ON CONFLICT (router_id, neighbor_id) DO NOTHING;
+            #     """,
+            #     (nei, rtr.ip)
+            # )
 
-                # # ...and create the nei --> rtr relationship (reverse).
-                # # We could try to add 'learned_prefixes' here, 
-                # # but it makes more sense to learn it from the 
-                # # remote router's perspective on a subsequent cycle
-                # # with the SQL statement above.
-                # cur.execute(
-                #     """
-                #     INSERT INTO router_neighbors (router_id, neighbor_id)
-                #     VALUES (%s, %s)
-                #     ON CONFLICT (router_id, neighbor_id) DO NOTHING;
-                #     """,
-                #     (nei, rtr.ip)
-                # )
+        # Make the changes to the database persistent
+    
+    with conn.cursor() as cursor:
+        inventory_router(cursor, rtr) # Add router to DB
+        inventory_rtr_neighbors(cursor, rtr) # Add router's neighbors to DB
+        import_rtr_adjacencies(cursor, rtr)#  Add router's EIGRP adjacencies to DB
 
-            # Make the changes to the database persistent
-            conn.commit()
+    conn.commit()
 
 def iterate_discovery(conn):
-    # Begins dynamic discovery by referencing DB data
-    discovery_active = True # loop control
+    discovery_active = True  # Control variable for the loop
+
     while discovery_active:
-        
-        pending_routers = list()
-
         with conn.cursor() as cur:
-            # Collects all data from inventory table
-            cur.execute("""
-                SELECT (ip, discovered_state) FROM inventory;
-                """)
+            # Select all undiscovered routers
+            cur.execute("SELECT ip FROM inventory WHERE discovered_state IS FALSE;")
+            pending_routers = [row[0] for row in cur.fetchall()]
 
-            rows = cur.fetchall()
+        # If there are no more undiscovered routers, exit the loop
+        if not pending_routers:
+            discovery_active = False
+            print("No more routers pending discovery.")
+            break
 
-            # Checks if router has been marked discovered yet
-            
-            for row in rows:
-                if row[0][1] != 't':
-                    print(f"Router isn't discovered yet: {row[0][0]}")
-                    pending_routers.append(row[0][0])
-                    continue
-                else:
-                    print(f"Router has been previously discovered: {row[0][0]}")
-                    continue
-            
-            if len(pending_routers) > 0:
-                print("Total number routers pending discovery (this iteration): " + str(len(pending_routers)))
-                for ip in pending_routers:
-                    print(f"Beginning discovery on {ip}...")
-                    rtr = eigrp_speaker(ip)
-                    print(f"Discovery functions completed on {ip}. Posting results to DB.")
-                    inventory_to_db(conn, rtr)
-                    print(f"Database post complete.")
-
-            elif len(pending_routers) == 0:
-                print("No routers marked for discovery.")
-                discovery_active = False
-
-        # Iterate through all non-discovered routers and discover their neighbors
-        # add neighbors to DB
-        # set discovery_active to False when no further iterations exist
+        # Process each router in the list of pending routers
+        for ip in pending_routers:
+            print(f"Discovering {ip}")
+            rtr = EIGRPSpeaker(ip)
+            inventory_to_db(conn, rtr)
+        
+        # Optional: Add a delay here if desired to prevent rapid looping
 
 def main():
     PG_USER = os.environ.get("PG_USER")
@@ -227,7 +237,7 @@ def main():
         except Exception as e: 
             print(f"Failed to initialize DB tables: {e}")
 
-        rtr = eigrp_speaker(SEED_IP)
+        rtr = EIGRPSpeaker(SEED_IP)
         inventory_to_db(conn, rtr)
 
         iterate_discovery(conn)
