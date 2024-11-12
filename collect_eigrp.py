@@ -226,11 +226,10 @@ def iterate_discovery(conn):
 def main():
     PG_USER = os.environ.get("PG_USER")
     PG_PASS = os.environ.get("PG_PASS")
-    HOSTNAME = "localhost"
-    PORT = "5432"
+    HOSTNAME = "localhost" # PSQL server
+    PORT = "5432" # PSQL connection
     DB_NAME = "routers"
-    SEED_IP = "172.16.1.3"
-    # ips = ["172.16.1.3", "172.16.1.5", "172.21.1.26", "10.11.11.2", "172.21.1.18", "172.16.2.38", "172.16.1.253", "172.16.4.2", "172.20.3.1", "172.21.1.14", "172.21.1.22", "172.17.2.6", "172.16.2.61"]
+    SEED_IP = "172.16.1.3" # First router to start the "crawl" with
 
     with psycopg.connect(f"postgresql://{PG_USER}:{PG_PASS}@{HOSTNAME}:{PORT}/{DB_NAME}") as conn:
         try: create_db_tables(conn)

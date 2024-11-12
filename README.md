@@ -38,6 +38,8 @@ This repo is dedicated to housing some utilities I've built to explore intersect
    pip install -r requirements.txt
    ```
 
-4. Add all relevant variables to [the .env file.](https://github.com/dakotah-hurda/psql-testing/blob/main/.env.template)
+4. Add all relevant variables to [the .env file.](https://github.com/dakotah-hurda/psql-testing/blob/main/.env.template) Make sure to rename the .env.template file to simply '.env'. 
 
-5. 
+    > :warning: NEVER share access to this file!
+
+5. Edit the STATIC_VARS in [collect_eigrp.py](./collect_eigrp.py#227-232) lines 227-232 to your values.
