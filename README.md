@@ -38,6 +38,6 @@ This repo is dedicated to housing some utilities I've built to explore intersect
    pip install -r requirements.txt
    ```
 
-4. Add all relevant variables to [the .env file.](https://github.com/dakotah-hurda/psql-testing/blob/main/.env)
+4. Add all relevant variables to [the .env file.](https://github.com/dakotah-hurda/psql-testing/blob/main/.env.template)
 
 5. 
