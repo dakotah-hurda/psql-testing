@@ -78,7 +78,7 @@ From a high-level, the script:
 
     > :warning: NEVER share access to this file!
 
-6. Edit the STATIC_VARS in [collect_eigrp.py](./collect_eigrp.py#227-232) lines 227-232 to your values.
+6. Edit the STATIC_VARS in [collect_eigrp.py](https://github.com/dakotah-hurda/psql-testing/blob/a107f1e35771d8c5a1db59a132228f372f3cc70c/collect_eigrp.py#L227-L232) lines 227-232 to your values.
 
 7. Run the python script
 
