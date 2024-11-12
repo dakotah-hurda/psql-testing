@@ -63,21 +63,27 @@ From a high-level, the script:
     python -m venv .
     ```
 
-3. Install all python dependencies:
+3. Active the virtual environment on your machine.
+
+    ```
+    path/to/cloned/repo/Scripts/activate
+    ```
+    
+4. Install all python dependencies:
    ```
    pip install -r requirements.txt
    ```
 
-4. Add all relevant variables to [the .env file.](https://github.com/dakotah-hurda/psql-testing/blob/main/.env.template) Make sure to rename the .env.template file to simply '.env'. 
+5. Add all relevant variables to [the .env file.](https://github.com/dakotah-hurda/psql-testing/blob/main/.env.template) Make sure to rename the .env.template file to simply '.env'. 
 
     > :warning: NEVER share access to this file!
 
-5. Edit the STATIC_VARS in [collect_eigrp.py](./collect_eigrp.py#227-232) lines 227-232 to your values.
+6. Edit the STATIC_VARS in [collect_eigrp.py](./collect_eigrp.py#227-232) lines 227-232 to your values.
 
-6. Run the python script
+7. Run the python script
 
     ```
     python collect_eigrp.py
     ```
 
-7. Pray it works! The output from the script in your terminal should give you a clue on it's status. You can also query your PostgreSQL database for results. 
+8. Pray it works! The output from the script in your terminal should give you a clue on it's status. You can also query your PostgreSQL database for results. 
